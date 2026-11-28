@@ -2,6 +2,9 @@
 
 TEST-ONLY reference model; not the Blades engine or production GM runtime.
 Fixed dice in the integrated case are fixtures, not random rolls.
+Crew-level exposure uses the ordinary team track; there is no bespoke solo track.
+Death/return details are deliberately not modeled beyond the campaign's stated
+paranoia threshold because those consequences will be discussed when relevant.
 """
 from __future__ import annotations
 from copy import deepcopy
@@ -16,8 +19,9 @@ class SoloState:
     ordinary_traumas: list[str] = field(default_factory=list)
     paranoia_traumas: int = 0
     deaths: int = 0
-    exposure: int = 0  # provisional solo adapter; not yet a final house rule
+    crew_heat: int = 0
     wanted: int = 0
+    crew_mode: str = "single_operator_uses_team_rules"
     house: str = "small_private_house"
     house_is_crew_base: bool = False
     family_aware_of_death: bool = False
@@ -48,9 +52,14 @@ def pay_contract(state: SoloState, event_id: str, reward: int, completed: bool) 
     return apply_once(state, event_id, lambda: setattr(state, "cash", state.cash + reward))
 
 
-def expose(state: SoloState, event_id: str, amount: int, informed_factions=()) -> bool:
+def record_team_exposure(state: SoloState, event_id: str, heat: int, informed_factions=()) -> bool:
+    """Apply an already-determined ordinary team Heat result once.
+
+    This helper does not define Heat calculation, reductions, thresholds, or
+    Wanted consequences. Those remain governed by Blades v1.3.
+    """
     def change():
-        state.exposure += amount
+        state.crew_heat += heat
         for faction_id in informed_factions:
             if faction_id in state.factions:
                 state.factions[faction_id]["known"].append(event_id)
@@ -82,14 +91,18 @@ def mark_ordinary_trauma(state: SoloState, condition: str) -> None:
     state.pressure = 0
 
 
-def die_and_return(state: SoloState, event_id: str) -> bool:
-    def return_from_death():
+def register_actual_death(state: SoloState, event_id: str) -> bool:
+    """Record only the established consequence: one paranoia trauma per death.
+
+    No resurrection timing, location, injury, gear, pressure, or scene fallout
+    is modeled here. At the trauma cap, the campaign-specific result is final death.
+    """
+    def consequence():
         state.deaths += 1
         state.paranoia_traumas += 1
-        state.pressure = 0
         if state.paranoia_traumas >= 4:
-            state.status = "TERMINAL_TRAUMA_THRESHOLD"
-    return apply_once(state, event_id, return_from_death)
+            state.status = "PERMANENT_DEATH"
+    return apply_once(state, event_id, consequence)
 
 
 def rule_precedence(module=None, system=None, general=None):
@@ -104,17 +117,23 @@ class BladesSoloPreflightTests(unittest.TestCase):
     def setUp(self):
         self.state = SoloState()
 
-    def test_starting_personal_cash_is_two_and_no_crew_exists(self):
+    def test_starting_personal_cash_is_two_and_no_crew_is_established(self):
         self.assertEqual(self.state.cash, 2)
         self.assertIsNone(self.state.crew)
 
-    def test_house_is_personal_property_not_crew_base(self):
+    def test_personal_house_is_not_a_crew_base(self):
         self.assertEqual(self.state.house, "small_private_house")
         self.assertFalse(self.state.house_is_crew_base)
 
     def test_unspecified_family_support_does_not_create_cash(self):
         self.assertIn("unspecified", self.state.family_support)
         self.assertEqual(self.state.cash, 2)
+
+    def test_solo_operator_uses_shared_team_exposure_tracks(self):
+        self.assertEqual(self.state.crew_mode, "single_operator_uses_team_rules")
+        self.assertEqual(self.state.crew_heat, 0)
+        self.assertEqual(self.state.wanted, 0)
+        self.assertFalse(hasattr(self.state, "personal_exposure"))
 
     def test_contract_reward_is_paid_once_to_personal_cash(self):
         self.assertTrue(pay_contract(self.state, "job-01", 2, True))
@@ -138,51 +157,44 @@ class BladesSoloPreflightTests(unittest.TestCase):
         self.assertEqual(self.state.cash, 0)
 
     def test_only_informed_factions_make_downtime_plans(self):
-        expose(self.state, "witnessed-event", 2, ["nearby_observers"])
+        record_team_exposure(self.state, "witnessed-event", 2, ["nearby_observers"])
         start_downtime(self.state)
         self.assertEqual(self.state.factions["nearby_observers"]["plan"]["status"], "planned")
         self.assertIsNone(self.state.factions["distant_syndicate"]["plan"])
 
     def test_plan_is_not_treated_as_resolved_result(self):
-        expose(self.state, "witnessed-event", 2, ["nearby_observers"])
+        record_team_exposure(self.state, "witnessed-event", 2, ["nearby_observers"])
         start_downtime(self.state)
         self.assertEqual(self.state.factions["nearby_observers"]["plan"]["status"], "planned")
         resolve_downtime(self.state, ["project", "research"], {"nearby_observers": "partial"})
         self.assertEqual(self.state.factions["nearby_observers"]["plan"]["status"], "partial")
 
     def test_unseen_secret_does_not_enter_faction_knowledge(self):
-        expose(self.state, "secret-event", 0, [])
+        record_team_exposure(self.state, "secret-event", 0, [])
         self.assertEqual(self.state.factions["nearby_observers"]["known"], [])
         self.assertEqual(self.state.factions["distant_syndicate"]["known"], [])
 
-    def test_same_exposure_event_is_not_counted_twice(self):
-        expose(self.state, "single-event", 2, ["nearby_observers"])
-        expose(self.state, "single-event", 2, ["nearby_observers"])
-        self.assertEqual(self.state.exposure, 2)
+    def test_same_team_exposure_event_is_not_counted_twice(self):
+        record_team_exposure(self.state, "single-event", 2, ["nearby_observers"])
+        record_team_exposure(self.state, "single-event", 2, ["nearby_observers"])
+        self.assertEqual(self.state.crew_heat, 2)
         self.assertEqual(self.state.factions["nearby_observers"]["known"], ["single-event"])
 
     def test_ordinary_trauma_is_not_death_and_does_not_add_paranoia(self):
         mark_ordinary_trauma(self.state, "reckless")
         self.assertEqual(self.state.deaths, 0)
         self.assertEqual(self.state.paranoia_traumas, 0)
-        self.assertEqual(self.state.pressure, 0)
 
-    def test_actual_death_adds_one_paranoia_and_returns_pressure_to_zero(self):
-        self.state.pressure = 7
-        self.assertTrue(die_and_return(self.state, "death-01"))
-        self.assertFalse(die_and_return(self.state, "death-01"))
-        self.assertEqual((self.state.deaths, self.state.paranoia_traumas, self.state.pressure), (1, 1, 0))
+    def test_actual_death_adds_one_paranoia_once(self):
+        self.assertTrue(register_actual_death(self.state, "death-01"))
+        self.assertFalse(register_actual_death(self.state, "death-01"))
+        self.assertEqual((self.state.deaths, self.state.paranoia_traumas), (1, 1))
 
-    def test_fourth_death_enters_terminal_trauma_threshold(self):
+    def test_full_paranoia_means_permanent_death(self):
         for i in range(1, 5):
-            die_and_return(self.state, f"death-{i}")
+            register_actual_death(self.state, f"death-{i}")
         self.assertEqual(self.state.paranoia_traumas, 4)
-        self.assertEqual(self.state.status, "TERMINAL_TRAUMA_THRESHOLD")
-
-    def test_death_does_not_automatically_inform_family_or_destroy_house(self):
-        die_and_return(self.state, "private-death")
-        self.assertFalse(self.state.family_aware_of_death)
-        self.assertEqual(self.state.house, "small_private_house")
+        self.assertEqual(self.state.status, "PERMANENT_DEATH")
 
     def test_npc_presence_alone_does_not_grant_help_bonus(self):
         self.assertFalse(npc_assistance(True, False, True))
@@ -196,10 +208,11 @@ class BladesSoloPreflightTests(unittest.TestCase):
         self.assertEqual(rule_precedence(None, None, "general"), "general")
 
     def test_state_snapshot_preserves_resources_and_information_boundaries(self):
-        expose(self.state, "known-event", 2, ["nearby_observers"])
+        record_team_exposure(self.state, "known-event", 2, ["nearby_observers"])
         start_downtime(self.state)
         restored = deepcopy(self.state)
         self.assertEqual(restored.cash, self.state.cash)
+        self.assertEqual(restored.crew_heat, self.state.crew_heat)
         self.assertEqual(restored.factions, self.state.factions)
         self.assertIsNone(restored.factions["distant_syndicate"]["plan"])
         self.assertIsNone(restored.crew)
@@ -211,17 +224,16 @@ class BladesSoloPreflightTests(unittest.TestCase):
         self.assertIn(engagement, (4, 5))
         self.assertEqual(max(action_dice), 6)
         pay_contract(self.state, "synthetic-job", 2, True)
-        expose(self.state, "synthetic-witness", 2, ["nearby_observers"])
+        record_team_exposure(self.state, "synthetic-witness", 2, ["nearby_observers"])
         start_downtime(self.state)
-        self.state.long_project_ticks = 2  # fixed 4/5 project result
+        self.state.long_project_ticks = 2
         resolve_downtime(self.state, ["project-step-1", "project-step-2"], {"nearby_observers": "partial"})
         self.assertEqual(self.state.cash, 4)
-        self.assertEqual(self.state.exposure, 2)  # provisional track, not a locked rule
+        self.assertEqual(self.state.crew_heat, 2)
         self.assertEqual(self.state.long_project_ticks, 2)
         self.assertEqual(self.state.factions["nearby_observers"]["plan"]["status"], "partial")
         self.assertIsNone(self.state.factions["distant_syndicate"]["plan"])
         self.assertIsNone(self.state.crew)
-        self.assertFalse(self.state.family_aware_of_death)
         self.assertEqual(self.state.status, "TEST_ONLY_NON_CANON")
 
 
