@@ -45,6 +45,8 @@
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_blades_solo_preflight.py' -v
 ```
 
+**本轮复核结果：19 项通过，0 项失败。** 本次执行的临时副本与 GitHub `main` 上的测试文件内容完全一致；通过结果仅覆盖上述参考模型中的断言。
+
 ## 3. 历史合成预演摘要
 
 **本节全部为 TEST_ONLY_NON_CANON，不是奥兰正史。**
