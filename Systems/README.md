@@ -10,6 +10,7 @@
 
 - [Daggerheart™ Compatible /《匕首心》](./Daggerheart/README.md) — `system_id: daggerheart`；默认规则集 Daggerheart Core Set；SRD 2.0 混合收录 Core 与 Hope & Fear，已分库并默认关闭扩展；当前为 candidate。
 - [Worlds Without Number（WWN）](./Worlds_Without_Number/README.md) — `system_id: worlds_without_number`；英文核心规则与 SRD 1.0 作为研究基线；独立研究中，当前为 candidate，尚未开放正式运行。
+- [Mothership / 母舰](./Mothership/README.md) — `system_id: mothership`；Mothership 1E；规则与模组运行准备中，当前为 candidate。
 
 ```yaml
 systems:
@@ -33,6 +34,10 @@ systems:
   - system_id: worlds_without_number
     system_entry: Systems/Worlds_Without_Number/README.md
     ruleset_versions: ["Worlds Without Number Core Rulebook", "SRD 1.0 (mechanics reference)"]
+    status: candidate
+  - system_id: mothership
+    system_entry: Systems/Mothership/README.md
+    ruleset_versions: ["Mothership 1E"]
     status: candidate
 ```
 
